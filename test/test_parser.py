@@ -1,14 +1,23 @@
 # coding: utf-8
 
+from mf2py import Parser
 from nose.tools import assert_equal, assert_true
-import os.path
 from pprint import pprint
-from mf2py.parser import Parser
+import os.path
+import sys
+
+if sys.version < '3':
+    text_type = unicode
+    binary_type = str
+else:
+    text_type = str
+    binary_type = bytes
 
 
-def parse_fixture(path):
-    p = Parser(doc=open(os.path.join("test/examples/", path)))
-    return p.to_dict()
+def parse_fixture(path, url=None):
+    with open(os.path.join("test/examples/", path)) as f:
+        p = Parser(doc=f, url=url)
+        return p.to_dict()
 
 
 def test_empty():
@@ -139,27 +148,48 @@ def test_implied_image():
 def test_datetime_parsing():
     result = parse_fixture("datetimes.html")
     assert_equal(result["items"][0]["properties"]["start"][0],
-                 "2014-01-01T12:00:00+00:00")
+                 "2014-01-01T12:00:00+0000")
     assert_equal(result["items"][0]["properties"]["end"][0],
-                 "3014-01-01T18:00:00+00:00")
+                 "3014-01-01T18:00:00+0000")
     assert_equal(result["items"][0]["properties"]["duration"][0],
                  "P1000Y")
     assert_equal(result["items"][0]["properties"]["updated"][0],
-                 "2011-08-26T00:01:21+00:00")
+                 "2011-08-26T00:01:21+0000")
     assert_equal(result["items"][0]["properties"]["updated"][1],
-                 "2011-08-26T00:01:21+00:00")
+                 "2011-08-26T00:01:21+0000")
 
 
 def test_datetime_vcp_parsing():
     result = parse_fixture("datetimes.html")
     assert_equal(result["items"][1]["properties"]["published"][0],
-                 "3014-01-01T01:21+00:00")
+                 "3014-01-01T01:21:00+0000")
     assert_equal(result["items"][2]["properties"]["updated"][0],
-                 "2014-03-11T09:55")
+                 "2014-03-11T09:55:00")
     assert_equal(result["items"][3]["properties"]["published"][0],
-                 "2014-01-30T15:28")
+                 "2014-01-30T15:28:00")
     assert_equal(result["items"][4]["properties"]["published"][0],
-                 "9999-01-14T11:52+08:00")
+                 "9999-01-14T11:52:00+0800")
+    assert_equal(result["items"][5]["properties"]["published"][0],
+                 "2014-06-01T12:30:00-0600")
+
+
+def test_dt_end_implied_date():
+    """Test that events with dt-start and dt-end use the implied date
+    rules http://microformats.org/wiki/value-class-pattern#microformats2_parsers
+    for times without dates"""
+    result = parse_fixture("datetimes.html")
+
+    event_wo_tz = result["items"][6]
+    assert_equal(event_wo_tz["properties"]["start"][0],
+                 "2014-05-21T18:30:00")
+    assert_equal(event_wo_tz["properties"]["end"][0],
+                 "2014-05-21T19:30:00")
+
+    event_w_tz = result["items"][7]
+    assert_equal(event_w_tz["properties"]["start"][0],
+                 "2014-06-01T12:30:00-0600")
+    assert_equal(event_w_tz["properties"]["end"][0],
+                 "2014-06-01T19:30:00-0600")
 
 
 def test_embedded_parsing():
@@ -174,7 +204,13 @@ def test_embedded_parsing():
 
 def test_backcompat():
     result = parse_fixture("backcompat.html")
-    assert_equal(set(result["items"][0]["type"]), set(["h-card"]))
+    assert_true('h-entry' in result['items'][0]['type'])
+    assert_equal('Tom Morris',
+                 result['items'][0]['properties']['author'][0]['properties']['name'][0])
+    assert_equal('A Title',
+                 result['items'][0]['properties']['name'][0])
+    assert_equal('Some Content',
+                 result['items'][0]['properties']['content'][0]['value'])
 
 
 def test_hoisting_nested_hcard():
@@ -216,12 +252,108 @@ def test_html_tag_class():
     assert_equal([u'entry2'], result['items'][0]['children'][1]['properties']['name'])
 
 
-
 def test_string_strip():
     result = parse_fixture("string_stripping.html")
-    print result 
     assert result["items"][0]["properties"]["name"][0] == "Tom Morris"
 
+
+def test_template_parse():
+    result = parse_fixture("template_tag.html")
+    assert len(result["items"]) == 0
+
+
+def test_backcompat_hproduct():
+    result = parse_fixture("backcompat_hproduct.html")
+    assert len(result["items"]) == 1
+    assert result["items"][0]["type"] == ["h-product"]
+    assert result["items"][0]["properties"]["category"] == [u'bullshit']
+    assert result["items"][0]["properties"]["brand"] == [u'Quacktastic Products']
+    assert result["items"][0]["properties"]["identifier"] == [u'#BULLSHIT-001']
+    assert result["items"][0]["properties"]['description'][0] ==  u"Magical tasty sugar pills that don't do anything."
+    assert result["items"][0]["properties"]["name"] == [u"Tom's Magical Quack Tincture"]
+
+
+def test_backcompat_hproduct_nested_hreview():
+    result = parse_fixture("backcompat_hproduct_hreview_nested.html")
+    assert result["items"][0]["children"][0]['type'] == ['h-review']
+    assert type(result["items"][0]["children"][0]['properties']['name'][0]) == text_type
+
+
+def test_backcompat_rel_bookmark():
+    """Confirm that rel=bookmark inside of an h-entry is converted
+    to u-url.
+    """
+    result = parse_fixture('backcompat_feed_with_rel_bookmark.html')
+    for ii, url in enumerate((
+            '/2014/11/24/jump-rope',
+            '/2014/11/23/graffiti',
+            '/2014/11/21/earth',
+            '/2014/11/19/labor',
+    )):
+        assert result['items'][ii]['type'] == ['h-entry']
+        assert result['items'][ii]['properties']['url'] == [url]
+
+
+def test_area_uparsing():
+    result = parse_fixture("area.html")
+    assert result["items"][0]["properties"] == {u'url': [u'http://suda.co.uk'], u'name': [u'Brian Suda']}
+    assert 'shape' in result["items"][0].keys()
+    assert 'coords' in result["items"][0].keys()
+
+
+def test_src_equiv():
+    result = parse_fixture("test_src_equiv.html")
+    for item in result["items"]:
+        assert 'x-example' in item['properties'].keys()
+        assert u'http://example.org/' == item['properties']['x-example'][0]
+
+
+def test_rels():
+    result = parse_fixture("rel.html")
+    assert result['rels'] == {
+        u'in-reply-to': [u'http://example.com/1', u'http://example.com/2'],
+        u'author': [u'http://example.com/a', u'http://example.com/b'],
+    }
+
+
+def test_empty_href():
+    result = parse_fixture("hcard_with_empty_url.html", "http://foo.com")
+
+    for hcard in result['items']:
+        assert hcard['properties'].get('url') == ['http://foo.com']
+
 if __name__ == '__main__':
-    result = parse_fixture("nested_multiple_classnames.html")
+    result = parse_fixture("hcard_with_empty_url.html", 'http://foo.com')
     pprint(result)
+
+def test_nested_values():
+    """When parsing nested microformats, check that value is the value of
+    the simple property element"""
+    result = parse_fixture("nested_values.html")
+    entry = result["items"][0]
+
+    assert_equal({
+        'properties': {
+            'name': ['Kyle'],
+            'url': ['http://about.me/kyle'],
+        },
+        'value': 'Kyle',
+        'type': ['h-card'],
+    }, entry["properties"]["author"][0])
+
+    assert_equal({
+        'properties': {
+            'name': ['foobar'],
+            'url': ['http://example.com/foobar'],
+        },
+        'value': 'http://example.com/foobar',
+        'type': ['h-cite'],
+    }, entry["properties"]["like-of"][0])
+
+    assert_equal({
+        'properties': {
+            'name': ['George'],
+            'url': ['http://people.com/george'],
+        },
+        'type': ['h-card'],
+    }, entry["children"][0])
