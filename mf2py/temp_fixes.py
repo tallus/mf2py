@@ -1,3 +1,3 @@
-def apply_rules(doc):
+def rm_templates(doc):
     for el in doc.find_all("template"):
         el.extract()
